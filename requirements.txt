@@ -1,0 +1,6 @@
+pyarrow
+pandas
+polars
+duckdb
+pyyaml
+tqdm
