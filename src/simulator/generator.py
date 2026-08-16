@@ -108,13 +108,23 @@ if __name__ == '__main__':
         exit()
 
     driver_pool = [str(uuid.uuid4()) for _ in range(5000)]
-    chunk_size = 5000
+    chunk_size = 50000
 
-    df_trips = pl.read_parquet(trips_path)
+    # 1. Read and filter all 3 months lazily
+    df_jan = pl.scan_parquet("data/raw/yellow_tripdata_2024-01.parquet").filter(pl.col("tpep_pickup_datetime").dt.year() == 2024)
+    df_feb = pl.scan_parquet("data/raw/yellow_tripdata_2024-02.parquet").filter(pl.col("tpep_pickup_datetime").dt.year() == 2024)
+    df_mar = pl.scan_parquet("data/raw/yellow_tripdata_2024-03.parquet").filter(pl.col("tpep_pickup_datetime").dt.year() == 2024)
+
+    df_trips = pl.concat([
+        df_jan.collect().sample(70000),
+        df_feb.collect().sample(70000),
+        df_mar.collect().sample(70000)
+    ], how="vertical_relaxed")
     
     # Process rows in batches/chunks
     total_rows = df_trips.height
-    for start_row in range(0, 5000, chunk_size):
+    print(total_rows)
+    for start_row in range(0, 100000, chunk_size):
         batch = df_trips.slice(start_row, chunk_size)
 
         # Gather all events for a chunk

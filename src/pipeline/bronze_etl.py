@@ -5,7 +5,7 @@ import datetime, os
 files = glob.glob('data/landing/**/*.jsonl', recursive=True)
 
 for file in files:
-    events = pl.read_ndjson(file)
+    events = pl.read_ndjson(file, schema_overrides={'payload': pl.Utf8})
     events = events.with_columns(
         pl.lit(datetime.datetime.now().isoformat()).alias("ingest_timestamp")
     )
