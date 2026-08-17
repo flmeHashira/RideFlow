@@ -92,11 +92,7 @@ def generate_trip_events(row, driver_id):
             'total_amount': row['total_amount']
         }
     })
-    # os.makedirs(folder_path, exist_ok=True)
-    
-    # with open(folder_path + "/events_001.jsonl", 'a') as f:
-    #     for event in events:
-    #         f.write(json.dumps(event) + '\n')
+
     return events
 
 
@@ -110,7 +106,7 @@ if __name__ == '__main__':
     driver_pool = [str(uuid.uuid4()) for _ in range(5000)]
     chunk_size = 50000
 
-    # 1. Read and filter all 3 months lazily
+    # Read and filter all 3 months lazily
     df_jan = pl.scan_parquet("data/raw/yellow_tripdata_2024-01.parquet").filter(pl.col("tpep_pickup_datetime").dt.year() == 2024)
     df_feb = pl.scan_parquet("data/raw/yellow_tripdata_2024-02.parquet").filter(pl.col("tpep_pickup_datetime").dt.year() == 2024)
     df_mar = pl.scan_parquet("data/raw/yellow_tripdata_2024-03.parquet").filter(pl.col("tpep_pickup_datetime").dt.year() == 2024)
@@ -120,11 +116,21 @@ if __name__ == '__main__':
         df_feb.collect().sample(70000),
         df_mar.collect().sample(70000)
     ], how="vertical_relaxed")
+
+    # Calculate ground truth for the exact sample we just took
+    total_trips = df_trips.height
+    total_revenue = df_trips.select(pl.col("total_amount").sum()).item()
+
+    # Write the manifest
+    os.makedirs("data/queue", exist_ok=True)
+    manifest = {"total_trips": total_trips, "total_revenue": total_revenue}
+    with open("data/queue/source_manifest.json", "w") as f:
+        json.dump(manifest, f)
     
     # Process rows in batches/chunks
     total_rows = df_trips.height
     print(total_rows)
-    for start_row in range(0, 100000, chunk_size):
+    for start_row in range(0, total_rows, chunk_size):
         batch = df_trips.slice(start_row, chunk_size)
 
         # Gather all events for a chunk
@@ -132,22 +138,30 @@ if __name__ == '__main__':
             events = generate_trip_events(row, random.choice(driver_pool))
             chunk_events.extend(events)
 
+        file_path = f"data/queue/events_{str(start_row // chunk_size).zfill(3)}.jsonl"
+        os.makedirs("data/queue", exist_ok=True)
+        with open(file_path, 'a') as f:
+            for event in chunk_events:
+                f.write(json.dumps(event) + '\n')
 
-        grouped_events  = defaultdict(list)
+        chunk_events = []
+
+
+        # grouped_events  = defaultdict(list)
         # In memory dict for all chunks
-        for event in chunk_events:
-            event_date = event['timestamp'][:10] # grabs "2024-01-01"
-            folder_path = f"data/landing/ingest_year={event_date[:4]}/ingest_month={event_date[5:7]}/ingest_day={event_date[8:10]}"
-            grouped_events[folder_path].append(event)
+        # for event in chunk_events:
+        #     event_date = event['timestamp'][:10] # grabs "2024-01-01"
+        #     folder_path = f"data/landing/ingest_year={event_date[:4]}/ingest_month={event_date[5:7]}/ingest_day={event_date[8:10]}"
+        #     grouped_events[folder_path].append(event)
 
-        for folder_path, event_list in grouped_events.items():
-            os.makedirs(folder_path, exist_ok=True)
+        # for folder_path, event_list in grouped_events.items():
+        #     os.makedirs(folder_path, exist_ok=True)
 
-            file_path = folder_path + '/events_001.jsonl'
+        #     file_path = folder_path + '/events_001.jsonl'
 
-            with open(file_path, 'a') as f:
-                for event in event_list:
-                    f.write(json.dumps(event) + '\n')
+        #     with open(file_path, 'a') as f:
+        #         for event in event_list:
+        #             f.write(json.dumps(event) + '\n')
 
 
         
