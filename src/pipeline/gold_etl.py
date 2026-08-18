@@ -1,58 +1,48 @@
 import duckdb
-import pandas as pd
-import time
 import os
-import glob
 
-def get_directory_size(directory):
-    total_size = 0
-    # Recursively find all parquet files and sum their sizes in bytes
-    for filepath in glob.glob(f'{directory}/**/*.parquet', recursive=True):
-        total_size += os.path.getsize(filepath)
-    # Convert bytes to Megabytes (MB)
-    return total_size / (1024 * 1024)
-
-def build_gold_metrics():
-    print("--- Building Gold Layer Analytics ---\n")
+def build_gold_layer():
+    print("--- Building Gold Layer (Materializing to Disk) ---")
     
-    # 1. Calculate Data Size
-    silver_size_mb = get_directory_size("data/silver")
-    print(f"📊 Scanning Silver Layer: {silver_size_mb:.2f} MB of Parquet files")
+    # Create the gold directory if it doesn't exist
+    os.makedirs("data/gold", exist_ok=True)
     
-    # 2. Start Timer
-    start_time = time.perf_counter()
-    
-    # 3. Connect to DuckDB
     con = duckdb.connect()
+
+    # Daily Aggregates Table
+    print("Writing agg_daily_metrics.parquet...")
+    con.execute("""
+        COPY (
+            SELECT 
+                event_date,
+                COUNT(CASE WHEN event_type = 'TRIP_COMPLETED' THEN 1 END) AS total_trips,
+                SUM(CASE WHEN event_type = 'PAYMENT_COMPLETED' THEN CAST(payload->>'total_amount' AS DOUBLE) ELSE 0 END) AS total_revenue
+            FROM read_parquet('data/silver/**/*.parquet')
+            GROUP BY event_date
+            ORDER BY event_date
+        ) TO 'data/gold/agg_daily_metrics.parquet' (FORMAT PARQUET);
+    """)
+
+    # Fact Trips Table (Kimball Star Schema)
+    print("Writing fact_trips.parquet...")
+    con.execute("""
+        COPY (
+            SELECT 
+                trip_id,
+                MAX(CASE WHEN event_type = 'TRIP_REQUESTED' THEN timestamp END) AS request_time,
+                MAX(CASE WHEN event_type = 'TRIP_STARTED' THEN timestamp END) AS start_time,
+                EXTRACT(HOUR FROM MAX(CASE WHEN event_type = 'TRIP_STARTED' THEN timestamp END)) AS start_hour,
+                MAX(CASE WHEN event_type = 'TRIP_STARTED' THEN CAST(payload->>'pickup_location_id' AS INT) END) AS pickup_location_id,
+                MAX(CASE WHEN event_type = 'TRIP_COMPLETED' THEN CAST(payload->>'dropoff_location_id' AS INT) END) AS dropoff_location_id,
+                MAX(CASE WHEN event_type = 'TRIP_COMPLETED' THEN CAST(payload->>'trip_distance' AS DOUBLE) END) AS trip_distance,
+                MAX(CASE WHEN event_type = 'PAYMENT_COMPLETED' THEN CAST(payload->>'total_amount' AS DOUBLE) END) AS total_amount
+            FROM read_parquet('data/silver/**/*.parquet')
+            WHERE event_type IN ('TRIP_REQUESTED', 'TRIP_STARTED', 'TRIP_COMPLETED', 'PAYMENT_COMPLETED')
+            GROUP BY trip_id
+        ) TO 'data/gold/fact_trips.parquet' (FORMAT PARQUET);
+    """)
     
-    # 4. The SQL Query
-    sql_query = """
-        SELECT 
-            event_date,
-            COUNT(CASE WHEN event_type = 'TRIP_COMPLETED' THEN 1 END) AS total_trips,
-            SUM(CASE WHEN event_type = 'PAYMENT_COMPLETED' THEN CAST(payload->>'total_amount' AS DOUBLE) ELSE 0 END) AS total_revenue
-        FROM read_parquet('data/silver/**/*.parquet')
-        GROUP BY event_date
-        ORDER BY event_date
-    """
-    
-    # 5. Execute Query
-    try:
-        result_df = con.execute(sql_query).fetch_df()
-        
-        # 6. Stop Timer
-        end_time = time.perf_counter()
-        execution_time = end_time - start_time
-        
-        # 7. Print Results + Metrics
-        print("\n✅ Daily Trips and Revenue (Gold Layer):")
-        print(result_df.to_string(index=False))
-        
-        print(f"\n⏱️ Query Execution Time: {execution_time:.4f} seconds")
-        print(f"⚡ Throughput: {silver_size_mb / execution_time:.2f} MB/sec processed")
-        
-    except Exception as e:
-        print(f"❌ Error executing query: {e}")
+    print("Gold Layer materialized successfully.")
 
 if __name__ == "__main__":
-    build_gold_metrics()
+    build_gold_layer()

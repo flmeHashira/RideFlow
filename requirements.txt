@@ -4,3 +4,5 @@ polars
 duckdb
 pyyaml
 tqdm
+streamlit
+plotly
